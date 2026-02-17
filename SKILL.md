@@ -35,9 +35,24 @@ Apply the chosen tier when writing `spec` fields: larger tiers should have more 
 1. `obliviate.exe init <instance> --workdir <path>`
 2. Ask the user about milestone sizing (see above)
 3. Add tasks with `obliviate.exe add` or `obliviate.exe add-batch`
-4. Run loop with `obliviate.exe go <instance>`
+4. **Hand off** `go` to the user (see below)
 5. Check progress with `obliviate.exe status [instance]`
 6. Inspect/recover via `show`, `runs`, `reset`, `skip`
+
+## Running the loop — DO NOT run `go` inside an LLM agent
+
+**Your job as the orchestrating agent stops after adding tasks.** Do NOT execute `obliviate.exe go` yourself. Instead, give the user the ready-to-paste command and tell them to run it in a separate terminal:
+
+```
+obliviate.exe go <instance> --agent-timeout 20m --cooldown 10s --json
+```
+
+Why:
+- `go` is a long-running standalone process (often hours). LLM agents will timeout, cancel, or waste tokens polling.
+- The binary handles its own retries, backoff, and graceful shutdown (Ctrl+C). No wrapper needed.
+- Running inside an agent risks orphaning in_progress tasks if the agent session dies.
+
+After handing off, you can still help the user check status, inspect runs, skip/reset tasks, or add more tasks. Just don't run the loop itself.
 
 ## Task schema
 
