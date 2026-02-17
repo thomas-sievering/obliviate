@@ -4,6 +4,8 @@ An opinionated Go implementation of the Ralph loop pattern for fresh-context tas
 
 This project builds on the idea shared by Geoffrey Huntley (Ralph loop), adapted for a pragmatic local CLI workflow.
 
+![Obliviate demo](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExZ3kyMTZoY285djJjeDd6cnZna2FtdXc1Y3lxN2EycTNwanU0M3dldiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/PcfozPlZSzARO/giphy.gif)
+
 ## What It Does
 
 - Runs one-task-at-a-time execution loops with fresh agent context.
@@ -39,3 +41,4 @@ obliviate runs <instance> [--limit N] [--task-id OB-001] [--json]
 
 Conceptual inspiration: Geoffrey Huntley’s Ralph loop guidance.
 Implementation: opinionated Go CLI for local project execution and stateful loops.
+

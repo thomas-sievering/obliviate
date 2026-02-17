@@ -7,6 +7,13 @@ description: Run a Ralph-style fresh-context task loop for a project. Use when d
 
 Use `obliviate.exe` as the single writer and runner for task-loop state.
 
+## Tool Resolution Rules
+
+- Always execute `C:\dev\_skills\obliviate\tool\obliviate.exe` first.
+- Only fall back to `obliviate.exe` from `PATH` if the skill-local path is missing.
+- Do not use recursive workspace search to discover binaries when the skill-local path is known.
+- If multiple copies exist, prefer the skill-local copy and report the chosen path before running commands.
+
 ## Canonical workflow
 
 1. `obliviate.exe init <instance> --workdir <path>`
@@ -68,5 +75,6 @@ For input objects, required fields are `title`, `spec`, and `verify` (string or 
 - global + instance learnings
 
 Then it spawns a fresh non-interactive agent process for that task, runs verify gates, and updates task status.
+
 
 
