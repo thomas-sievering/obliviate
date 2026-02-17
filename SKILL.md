@@ -9,7 +9,7 @@ Use `obliviate.exe` as the single writer and runner for task-loop state.
 
 ## Tool Resolution Rules
 
-- Always execute `tool/obliviate.exe` first (resolved from this skill directory).
+- Always execute `./obliviate.exe` first (sibling of this SKILL.md).
 - Only fall back to `obliviate.exe` from `PATH` if the skill-local path is missing.
 - Do not use recursive workspace search to discover binaries when the skill-local path is known.
 - If multiple copies exist, prefer the skill-local copy and report the chosen path before running commands.
@@ -75,6 +75,7 @@ For input objects, required fields are `title`, `spec`, and `verify` (string or 
 - global + instance learnings
 
 Then it spawns a fresh non-interactive agent process for that task, runs verify gates, and updates task status.
+
 
 
 
