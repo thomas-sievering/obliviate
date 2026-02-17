@@ -14,13 +14,30 @@ Use `obliviate.exe` as the single writer and runner for task-loop state.
 - Do not use recursive workspace search to discover binaries when the skill-local path is known.
 - If multiple copies exist, prefer the skill-local copy and report the chosen path before running commands.
 
+## Milestone sizing
+
+Before decomposing work into tasks, ask the user how big each task should be. Use one of these tiers:
+
+| Tier | Scope per task | Typical agent time | When to use |
+|---|---|---|---|
+| **Standard** | One focused feature slice (a few files + tests) | 10-30 min | Quick iterative work, tight feedback loops |
+| **Large** (default) | A full feature or subsystem across many files | 30-60 min | Overnight or long unattended runs |
+| **Full send** | Entire spec crammed into as few tasks as possible | 60+ min | Maximum unattended runtime, fire-and-forget |
+
+**Default is Large.** If the user doesn't specify, decompose into large tasks.
+
+When asking, phrase it as: *"How chunky should each task be? Standard (10-30 min each), Large (30-60 min, default), or Full send (60+ min, fewest tasks)?"*
+
+Apply the chosen tier when writing `spec` fields: larger tiers should have more detailed specs with multiple sub-objectives per task, while Standard should be tightly scoped to one concern.
+
 ## Canonical workflow
 
 1. `obliviate.exe init <instance> --workdir <path>`
-2. Add tasks with `obliviate.exe add` or `obliviate.exe add-batch`
-3. Run loop with `obliviate.exe go <instance>`
-4. Check progress with `obliviate.exe status [instance]`
-5. Inspect/recover via `show`, `runs`, `reset`, `skip`
+2. Ask the user about milestone sizing (see above)
+3. Add tasks with `obliviate.exe add` or `obliviate.exe add-batch`
+4. Run loop with `obliviate.exe go <instance>`
+5. Check progress with `obliviate.exe status [instance]`
+6. Inspect/recover via `show`, `runs`, `reset`, `skip`
 
 ## Task schema
 
