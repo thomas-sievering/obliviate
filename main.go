@@ -1567,7 +1567,7 @@ func runVerify(workdir, verifyCmd string, timeout time.Duration) (string, error)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", verifyCmd)
+	cmd := exec.CommandContext(ctx, "bash", "-c", verifyCmd)
 	cmd.Dir = workdir
 	cmd.WaitDelay = 10 * time.Second
 	cmd.Cancel = func() error { return killProcessTree(cmd.Process) }
