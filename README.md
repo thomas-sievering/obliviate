@@ -13,13 +13,16 @@ This project builds on the idea shared by Geoffrey Huntley (Ralph loop), adapted
 - Records task runs in `<project>/.obliviate/state/<instance>/runs.jsonl`.
 - Appends one-line cycle summaries to `<project>/.obliviate/state/<instance>/cycle.log`.
 - Supports optional commit enforcement with `obliviate go --require-commit`.
+- Graceful Ctrl+C shutdown: interrupted tasks reset to `todo`, not orphaned as `in_progress`.
+- Transient provider failures (rate limits, service unavailable) retry with exponential backoff without burning attempts.
+- Per-task locking: the lock is released during agent execution so `status`, `skip`, and `reset` remain usable.
 
 ## Core Commands
 
 ```powershell
 obliviate init <instance> --workdir <project-path>
 obliviate add <instance> --title "..." --spec "..." --verify "..."
-obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--json]
+obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 0s] [--max-attempts 2] [--max-transient-retries 3] [--json]
 obliviate status [instance] [--json]
 obliviate runs <instance> [--limit N] [--task-id OB-001] [--json]
 ```
@@ -27,9 +30,12 @@ obliviate runs <instance> [--limit N] [--task-id OB-001] [--json]
 ## Loop Semantics
 
 - Tasks move through: `todo -> in_progress -> done|failed|blocked`.
+- Stale `in_progress` tasks are recovered to `todo` at the start of each `go` run.
 - Verification commands gate completion.
-- Failed tasks retry up to `maxAttempts` then become `blocked`.
+- Failed tasks retry up to `--max-attempts` (default 2) then become `blocked`.
+- Transient provider failures (rate limits, service unavailable) retry with exponential backoff (30s, 60s, 120s) up to `--max-transient-retries` (default 3) without incrementing attempts.
 - With `--require-commit`, successful runs must create a new Git commit or the task is treated as failed.
+- `--cooldown` adds a sleep between tasks to avoid back-to-back agent launches.
 
 ## Files
 
@@ -39,6 +45,6 @@ obliviate runs <instance> [--limit N] [--task-id OB-001] [--json]
 
 ## Attribution
 
-Conceptual inspiration: Geoffrey Huntley’s Ralph loop guidance.
+Conceptual inspiration: Geoffrey Huntleyï¿½s Ralph loop guidance.
 Implementation: opinionated Go CLI for local project execution and stateful loops.
 

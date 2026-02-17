@@ -76,7 +76,7 @@ func TestNextRunnableTaskIndex(t *testing.T) {
 		{ID: "OB-002", Status: statusFailed, Attempts: 1},
 		{ID: "OB-003", Status: statusTodo},
 	}
-	idx := nextRunnableTaskIndex(tasks)
+	idx := nextRunnableTaskIndex(tasks, 2)
 	if idx != 2 {
 		t.Fatalf("expected todo task index 2 first, got %d", idx)
 	}
@@ -86,9 +86,97 @@ func TestNextRunnableTaskIndex(t *testing.T) {
 		{ID: "OB-002", Status: statusFailed, Attempts: 1},
 		{ID: "OB-003", Status: statusBlocked, Attempts: 2},
 	}
-	idx = nextRunnableTaskIndex(tasks)
+	idx = nextRunnableTaskIndex(tasks, 2)
 	if idx != 1 {
 		t.Fatalf("expected failed retry task index 1, got %d", idx)
+	}
+}
+
+func TestNextRunnableTaskIndexCustomMaxAttempts(t *testing.T) {
+	tasks := []Task{
+		{ID: "OB-001", Status: statusFailed, Attempts: 2},
+		{ID: "OB-002", Status: statusFailed, Attempts: 3},
+	}
+	// With maxAttempts=2, OB-001 is at the limit so not runnable.
+	idx := nextRunnableTaskIndex(tasks, 2)
+	if idx != -1 {
+		t.Fatalf("expected -1 with maxAttempts=2, got %d", idx)
+	}
+	// With maxAttempts=4, both are runnable; first one wins.
+	idx = nextRunnableTaskIndex(tasks, 4)
+	if idx != 0 {
+		t.Fatalf("expected 0 with maxAttempts=4, got %d", idx)
+	}
+}
+
+func TestIsTransientFailure(t *testing.T) {
+	cases := []struct {
+		reason string
+		want   bool
+	}{
+		{"rate_limit", true},
+		{"provider_unavailable", true},
+		{"quota", false},
+		{"billing", false},
+		{"auth", false},
+		{"model_unavailable", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := isTransientFailure(tc.reason); got != tc.want {
+			t.Fatalf("isTransientFailure(%q) = %v, want %v", tc.reason, got, tc.want)
+		}
+	}
+}
+
+func TestStaleInProgressRecovery(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "tasks.jsonl")
+	tasks := []Task{
+		{ID: "OB-001", Status: statusInProgress, UpdatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "OB-002", Status: statusTodo, UpdatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "OB-003", Status: statusInProgress, UpdatedAt: "2026-01-01T00:00:00Z", LastError: "old error"},
+	}
+	if err := saveTasks(p, tasks); err != nil {
+		t.Fatalf("saveTasks: %v", err)
+	}
+
+	// Simulate the recovery logic from cmdGo.
+	loaded, err := loadTasks(p)
+	if err != nil {
+		t.Fatalf("loadTasks: %v", err)
+	}
+	recovered := false
+	for i := range loaded {
+		if loaded[i].Status == statusInProgress {
+			loaded[i].Status = statusTodo
+			loaded[i].LastError = ""
+			loaded[i].UpdatedAt = nowUTC()
+			recovered = true
+		}
+	}
+	if !recovered {
+		t.Fatalf("expected recovery of stale in_progress tasks")
+	}
+	if err := saveTasks(p, loaded); err != nil {
+		t.Fatalf("saveTasks after recovery: %v", err)
+	}
+
+	// Verify results.
+	final, err := loadTasks(p)
+	if err != nil {
+		t.Fatalf("loadTasks after save: %v", err)
+	}
+	for _, tk := range final {
+		if tk.Status == statusInProgress {
+			t.Fatalf("task %s still in_progress after recovery", tk.ID)
+		}
+	}
+	if final[0].Status != statusTodo {
+		t.Fatalf("OB-001 should be todo, got %s", final[0].Status)
+	}
+	if final[2].LastError != "" {
+		t.Fatalf("OB-003 last_error should be cleared, got %q", final[2].LastError)
 	}
 }
 

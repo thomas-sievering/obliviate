@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -184,7 +185,7 @@ Usage:
   obliviate reset <instance> <task-id> [--json]
   obliviate skip <instance> <task-id> [--reason "..." ] [--json]
   obliviate runs <instance> [--limit N] [--task-id OB-001] [--json]
-  obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--json]`)
+  obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 0s] [--max-attempts 2] [--max-transient-retries 3] [--json]`)
 	fmt.Println(`
 Exit codes:
   0  success
@@ -633,7 +634,7 @@ func cmdRuns(args []string) error {
 
 func cmdGo(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: obliviate go <instance> [--limit N] [--dry-run] [--require-commit]")
+		return errors.New("usage: obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 0s] [--max-attempts 2] [--max-transient-retries 3]")
 	}
 	instance := args[0]
 
@@ -642,6 +643,10 @@ func cmdGo(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "show what would run")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	requireCommit := fs.Bool("require-commit", false, "require each successful task to create a new git commit")
+	flagAgentTimeout := fs.Duration("agent-timeout", agentTimeout, "override agent subprocess timeout")
+	cooldown := fs.Duration("cooldown", 0, "sleep between tasks")
+	flagMaxAttempts := fs.Int("max-attempts", maxAttempts, "override max attempts per task")
+	maxTransientRetries := fs.Int("max-transient-retries", 3, "max backoff retries for transient provider failures per task")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -660,15 +665,41 @@ func cmdGo(args []string) error {
 	workdir := resolveWorkdir(projectRoot, meta.Workdir)
 	tasksPath := filepath.Join(instDir, "tasks.jsonl")
 	runsPath := filepath.Join(instDir, "runs.jsonl")
-	lockRelease, err := acquireInstanceLock(instDir)
-	if err != nil {
-		return err
-	}
-	defer lockRelease()
 
-	tasks, err := loadTasks(tasksPath)
-	if err != nil {
-		return err
+	// Set up signal-aware context for graceful shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	// --- Stale in_progress recovery (under lock) ---
+	{
+		lockRelease, err := acquireInstanceLock(instDir)
+		if err != nil {
+			return err
+		}
+		tasks, err := loadTasks(tasksPath)
+		if err != nil {
+			lockRelease()
+			return err
+		}
+		recovered := false
+		for i := range tasks {
+			if tasks[i].Status == statusInProgress {
+				if !*jsonOut {
+					fmt.Printf("recovered stale in_progress task %s -> todo\n", tasks[i].ID)
+				}
+				tasks[i].Status = statusTodo
+				tasks[i].LastError = ""
+				tasks[i].UpdatedAt = nowUTC()
+				recovered = true
+			}
+		}
+		if recovered {
+			if err := saveTasks(tasksPath, tasks); err != nil {
+				lockRelease()
+				return err
+			}
+		}
+		lockRelease()
 	}
 
 	processed := 0
@@ -677,11 +708,32 @@ func cmdGo(args []string) error {
 	blockedCount := 0
 	taskIDs := make([]string, 0)
 	for {
+		// Check for shutdown between tasks.
+		if ctx.Err() != nil {
+			if !*jsonOut {
+				fmt.Println("interrupted, stopping loop")
+			}
+			break
+		}
+
 		if *limit > 0 && processed >= *limit {
 			break
 		}
-		idx := nextRunnableTaskIndex(tasks)
+
+		// Acquire lock, reload tasks, find next runnable.
+		lockRelease, err := acquireInstanceLock(instDir)
+		if err != nil {
+			return err
+		}
+		tasks, err := loadTasks(tasksPath)
+		if err != nil {
+			lockRelease()
+			return err
+		}
+
+		idx := nextRunnableTaskIndex(tasks, *flagMaxAttempts)
 		if idx < 0 {
+			lockRelease()
 			break
 		}
 		t := tasks[idx]
@@ -693,15 +745,21 @@ func cmdGo(args []string) error {
 			processed++
 			tasks[idx].Status = statusDone
 			taskIDs = append(taskIDs, t.ID)
+			_ = saveTasks(tasksPath, tasks)
+			lockRelease()
 			continue
 		}
 
+		// Mark in_progress and save while locked.
 		start := nowUTC()
 		tasks[idx].Status = statusInProgress
 		tasks[idx].UpdatedAt = start
 		if err := saveTasks(tasksPath, tasks); err != nil {
+			lockRelease()
 			return err
 		}
+		// Release lock during agent execution.
+		lockRelease()
 
 		primaryProvider, primaryModel := routeModel(t.ModelHint)
 		prompt, err := buildExecutionPrompt(home, instance, t)
@@ -715,7 +773,77 @@ func cmdGo(args []string) error {
 			headBefore, headBeforeErr = gitHead(workdir)
 		}
 
-		provider, model, agentOut, execErr, fb := runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt, agentTimeout)
+		// Transient retry loop.
+		var provider, model, agentOut string
+		var execErr error
+		var fb *fallbackAttempt
+		transientRetries := 0
+		for {
+			provider, model, agentOut, execErr, fb = runAgentWithFallback(ctx, primaryProvider, primaryModel, workdir, prompt, *flagAgentTimeout)
+
+			// If interrupted during agent execution, bail out.
+			if ctx.Err() != nil {
+				break
+			}
+
+			if execErr != nil {
+				reason := classifyProviderFailure(execErr, agentOut)
+				if isTransientFailure(reason) && transientRetries < *maxTransientRetries {
+					transientRetries++
+					backoff := 30 * time.Second * (1 << (transientRetries - 1))
+					if backoff > 120*time.Second {
+						backoff = 120 * time.Second
+					}
+					if !*jsonOut {
+						fmt.Printf("%s transient failure (%s), retry %d/%d after %s\n", t.ID, reason, transientRetries, *maxTransientRetries, backoff)
+					}
+					select {
+					case <-time.After(backoff):
+						continue
+					case <-ctx.Done():
+						break
+					}
+					if ctx.Err() != nil {
+						break
+					}
+				}
+			}
+			break
+		}
+
+		// Re-acquire lock to update task state.
+		lockRelease, err = acquireInstanceLock(instDir)
+		if err != nil {
+			return err
+		}
+		// Reload tasks under lock (another process may have modified them).
+		tasks, err = loadTasks(tasksPath)
+		if err != nil {
+			lockRelease()
+			return err
+		}
+		// Re-find the task (index may have shifted).
+		idx = findTaskIndex(tasks, t.ID)
+		if idx < 0 {
+			// Task was removed while we were running; skip.
+			lockRelease()
+			processed++
+			taskIDs = append(taskIDs, t.ID)
+			continue
+		}
+
+		// If interrupted, reset task to todo and exit.
+		if ctx.Err() != nil {
+			tasks[idx].Status = statusTodo
+			tasks[idx].UpdatedAt = nowUTC()
+			_ = saveTasks(tasksPath, tasks)
+			lockRelease()
+			if !*jsonOut {
+				fmt.Printf("%s interrupted, reset to todo\n", t.ID)
+			}
+			break
+		}
+
 		run := RunLog{
 			TaskID:          t.ID,
 			Provider:        provider,
@@ -767,7 +895,7 @@ func cmdGo(args []string) error {
 			tasks[idx].Attempts++
 			tasks[idx].LastError = execErr.Error()
 			tasks[idx].UpdatedAt = nowUTC()
-			if tasks[idx].Attempts >= maxAttempts {
+			if tasks[idx].Attempts >= *flagMaxAttempts {
 				tasks[idx].Status = statusBlocked
 				blockedCount++
 			} else {
@@ -792,14 +920,25 @@ func cmdGo(args []string) error {
 		}
 
 		if err := appendJSONLine(runsPath, run); err != nil {
+			lockRelease()
 			return err
 		}
 		if err := saveTasks(tasksPath, tasks); err != nil {
+			lockRelease()
 			return err
 		}
+		lockRelease()
 
 		processed++
 		taskIDs = append(taskIDs, t.ID)
+
+		// Cooldown between tasks.
+		if *cooldown > 0 {
+			select {
+			case <-time.After(*cooldown):
+			case <-ctx.Done():
+			}
+		}
 	}
 
 	if err := appendCycleSummaryLine(filepath.Join(instDir, "cycle.log"), instance, processed, doneCount, failedCount, blockedCount, taskIDs, *dryRun); err != nil {
@@ -1141,7 +1280,7 @@ func loadInstanceMeta(path string) (InstanceMeta, error) {
 	return m, err
 }
 
-func nextRunnableTaskIndex(tasks []Task) int {
+func nextRunnableTaskIndex(tasks []Task, maxAttempts int) int {
 	for i := range tasks {
 		if tasks[i].Status == statusTodo {
 			return i
@@ -1224,8 +1363,8 @@ func resolveWorkdir(projectRoot, configured string) string {
 	return filepath.Clean(filepath.Join(projectRoot, w))
 }
 
-func runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt string, timeout time.Duration) (provider, model, output string, err error, fb *fallbackAttempt) {
-	out1, err1 := runAgent(primaryProvider, primaryModel, workdir, prompt, timeout)
+func runAgentWithFallback(ctx context.Context, primaryProvider, primaryModel, workdir, prompt string, timeout time.Duration) (provider, model, output string, err error, fb *fallbackAttempt) {
+	out1, err1 := runAgent(ctx, primaryProvider, primaryModel, workdir, prompt, timeout)
 	if err1 == nil {
 		return primaryProvider, primaryModel, out1, nil, nil
 	}
@@ -1239,7 +1378,7 @@ func runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt string,
 		return primaryProvider, primaryModel, out1, err1, nil
 	}
 
-	out2, err2 := runAgent(fallbackProvider, fallbackModel, workdir, prompt, timeout)
+	out2, err2 := runAgent(ctx, fallbackProvider, fallbackModel, workdir, prompt, timeout)
 	combined := strings.TrimSpace(out1 + "\n\n[obliviate fallback]\n" + out2)
 	details := &fallbackAttempt{
 		PrimaryProvider:  primaryProvider,
@@ -1298,6 +1437,10 @@ func classifyProviderFailure(err error, output string) string {
 	}
 }
 
+func isTransientFailure(reason string) bool {
+	return reason == "rate_limit" || reason == "provider_unavailable"
+}
+
 func killProcessTree(p *os.Process) error {
 	kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(p.Pid))
 	if err := kill.Run(); err != nil {
@@ -1306,8 +1449,8 @@ func killProcessTree(p *os.Process) error {
 	return nil
 }
 
-func runAgent(provider, model, workdir, prompt string, timeout time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func runAgent(parentCtx context.Context, provider, model, workdir, prompt string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
 
 	var cmd *exec.Cmd
