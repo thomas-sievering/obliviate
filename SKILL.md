@@ -17,7 +17,7 @@ Use `obliviate.exe` as the single writer and runner for task-loop state.
 
 ## Task schema
 
-Each line in `state/<instance>/tasks.jsonl` is one JSON object:
+Each line in `.obliviate/state/<instance>/tasks.jsonl` is one JSON object:
 
 - `id`: string (`OB-001`)
 - `title`: string
@@ -42,13 +42,13 @@ For input objects, required fields are `title`, `spec`, and `verify` (string or 
 
 ## Instance state files
 
-- `state/<instance>/prompt.md`: instance runtime prompt/rules
-- `state/<instance>/spec.md`: feature source spec
-- `state/<instance>/tasks.jsonl`: task queue
-- `state/<instance>/learnings.md`: instance learnings
-- `state/<instance>/runs.jsonl`: append-only execution log
-- `state/<instance>/cycle.log`: one-line summary per `go` cycle
-- `state/<instance>/instance.json`: metadata (`workdir`)
+- `.obliviate/state/<instance>/prompt.md`: instance runtime prompt/rules
+- `.obliviate/state/<instance>/spec.md`: feature source spec
+- `.obliviate/state/<instance>/tasks.jsonl`: task queue
+- `.obliviate/state/<instance>/learnings.md`: instance learnings
+- `.obliviate/state/<instance>/runs.jsonl`: append-only execution log
+- `.obliviate/state/<instance>/cycle.log`: one-line summary per `go` cycle
+- `.obliviate/state/<instance>/instance.json`: metadata (`workdir`)
 
 ## Operational commands
 
@@ -68,4 +68,5 @@ For input objects, required fields are `title`, `spec`, and `verify` (string or 
 - global + instance learnings
 
 Then it spawns a fresh non-interactive agent process for that task, runs verify gates, and updates task status.
+
 

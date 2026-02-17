@@ -143,3 +143,33 @@ func TestAppendCycleSummaryLine(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveInstanceDirFromCWD(t *testing.T) {
+	tmp := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(orig)
+	}()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir tmp: %v", err)
+	}
+
+	instDir := filepath.Join(tmp, ".obliviate", "state", "alpha")
+	if err := os.MkdirAll(instDir, 0o755); err != nil {
+		t.Fatalf("mkdir inst dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(instDir, "instance.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write instance metadata: %v", err)
+	}
+
+	got, err := resolveInstanceDir("alpha")
+	if err != nil {
+		t.Fatalf("resolveInstanceDir error: %v", err)
+	}
+	if got != instDir {
+		t.Fatalf("resolveInstanceDir = %q, want %q", got, instDir)
+	}
+}

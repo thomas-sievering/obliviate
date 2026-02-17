@@ -11,3 +11,6 @@ state/
 # Keep examples/docs in repo via explicit includes when needed
 !README.md
 !SKILL.md
+
+# Project-local runtime state
+.obliviate/

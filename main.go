@@ -203,10 +203,11 @@ func cmdInit(args []string) error {
 		return err
 	}
 
-	home, err := resolveHome()
+	projectRoot, err := resolveProjectRootFromWorkdir(*workdir)
 	if err != nil {
 		return err
 	}
+	home := projectObliviateHome(projectRoot)
 	if err := ensureDir(home); err != nil {
 		return err
 	}
@@ -214,7 +215,7 @@ func cmdInit(args []string) error {
 		return err
 	}
 
-	stateDir := filepath.Join(home, "state")
+	stateDir := projectStateDir(projectRoot)
 	instDir := filepath.Join(stateDir, instance)
 	globalDir := filepath.Join(stateDir, "global")
 	if err := ensureDir(instDir); err != nil {
@@ -225,7 +226,7 @@ func cmdInit(args []string) error {
 	}
 
 	now := nowUTC()
-	meta := InstanceMeta{Name: instance, Workdir: *workdir, CreatedAt: now}
+	meta := InstanceMeta{Name: instance, Workdir: ".", CreatedAt: now}
 	metaBytes, _ := json.MarshalIndent(meta, "", "  ")
 
 	if err := writeIfMissing(filepath.Join(instDir, "instance.json"), string(metaBytes)+"\n"); err != nil {
@@ -357,13 +358,12 @@ func cmdStatus(args []string) error {
 		return errors.New("usage: obliviate status [instance] [--json]")
 	}
 
-	home, err := resolveHome()
-	if err != nil {
-		return err
-	}
-	stateDir := filepath.Join(home, "state")
 	if instance != "" {
-		tasks, err := loadTasks(filepath.Join(stateDir, instance, "tasks.jsonl"))
+		instDir, err := resolveInstanceDir(instance)
+		if err != nil {
+			return err
+		}
+		tasks, err := loadTasks(filepath.Join(instDir, "tasks.jsonl"))
 		if err != nil {
 			return err
 		}
@@ -375,8 +375,19 @@ func cmdStatus(args []string) error {
 		return nil
 	}
 
+	stateDir, err := resolveStateDirFromCWD()
+	if err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if *jsonOut {
+				return printJSON([]statusSummary{})
+			}
+			fmt.Println("no instances found")
+			return nil
+		}
 		return err
 	}
 	instances := make([]string, 0)
@@ -430,11 +441,11 @@ func cmdShow(args []string) error {
 		return errors.New("usage: obliviate show <instance> <task-id> [--json]")
 	}
 
-	home, err := resolveHome()
+	instDir, err := resolveInstanceDir(instance)
 	if err != nil {
 		return err
 	}
-	tasksPath := filepath.Join(home, "state", instance, "tasks.jsonl")
+	tasksPath := filepath.Join(instDir, "tasks.jsonl")
 	tasks, err := loadTasks(tasksPath)
 	if err != nil {
 		return err
@@ -469,13 +480,9 @@ func cmdReset(args []string) error {
 		return errors.New("usage: obliviate reset <instance> <task-id> [--json]")
 	}
 
-	home, err := resolveHome()
+	instDir, err := resolveInstanceDir(instance)
 	if err != nil {
 		return err
-	}
-	instDir := filepath.Join(home, "state", instance)
-	if _, err := os.Stat(filepath.Join(instDir, "instance.json")); err != nil {
-		return fmt.Errorf("instance %q is not initialized (run obliviate init %s)", instance, instance)
 	}
 	lockRelease, err := acquireInstanceLock(instDir)
 	if err != nil {
@@ -528,13 +535,9 @@ func cmdSkip(args []string) error {
 		return errors.New("usage: obliviate skip <instance> <task-id> [--reason \"...\"] [--json]")
 	}
 
-	home, err := resolveHome()
+	instDir, err := resolveInstanceDir(instance)
 	if err != nil {
 		return err
-	}
-	instDir := filepath.Join(home, "state", instance)
-	if _, err := os.Stat(filepath.Join(instDir, "instance.json")); err != nil {
-		return fmt.Errorf("instance %q is not initialized (run obliviate init %s)", instance, instance)
 	}
 	lockRelease, err := acquireInstanceLock(instDir)
 	if err != nil {
@@ -590,11 +593,11 @@ func cmdRuns(args []string) error {
 		return errors.New("limit must be >= 0")
 	}
 
-	home, err := resolveHome()
+	instDir, err := resolveInstanceDir(instance)
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(home, "state", instance, "runs.jsonl")
+	p := filepath.Join(instDir, "runs.jsonl")
 	runs, err := loadRuns(p)
 	if err != nil {
 		return err
@@ -644,17 +647,16 @@ func cmdGo(args []string) error {
 		return err
 	}
 
-	home, err := resolveHome()
+	instDir, err := resolveInstanceDir(instance)
 	if err != nil {
 		return err
 	}
-	stateDir := filepath.Join(home, "state")
-	instDir := filepath.Join(stateDir, instance)
 	meta, err := loadInstanceMeta(filepath.Join(instDir, "instance.json"))
 	if err != nil {
 		return err
 	}
 
+	home := filepath.Dir(filepath.Dir(instDir))
 	projectRoot := filepath.Dir(home)
 	workdir := resolveWorkdir(projectRoot, meta.Workdir)
 	tasksPath := filepath.Join(instDir, "tasks.jsonl")
@@ -819,15 +821,70 @@ func cmdGo(args []string) error {
 	return nil
 }
 
-func resolveHome() (string, error) {
-	if v := strings.TrimSpace(os.Getenv("OBLIVIATE_HOME")); v != "" {
-		return filepath.Abs(v)
-	}
-	exe, err := os.Executable()
+func resolveProjectRootFromCWD() (string, error) {
+	wd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Dir(exe), nil
+	return filepath.Clean(wd), nil
+}
+
+func resolveProjectRootFromWorkdir(workdir string) (string, error) {
+	w := strings.TrimSpace(workdir)
+	if w == "" {
+		w = "."
+	}
+	if !filepath.IsAbs(w) {
+		cwd, err := resolveProjectRootFromCWD()
+		if err != nil {
+			return "", err
+		}
+		w = filepath.Join(cwd, w)
+	}
+	w = filepath.Clean(w)
+	info, err := os.Stat(w)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("workdir must be a directory: %s", w)
+	}
+	return w, nil
+}
+
+func projectObliviateHome(projectRoot string) string {
+	return filepath.Join(projectRoot, ".obliviate")
+}
+
+func projectStateDir(projectRoot string) string {
+	return filepath.Join(projectObliviateHome(projectRoot), "state")
+}
+
+func projectInstanceDir(projectRoot, instance string) string {
+	return filepath.Join(projectStateDir(projectRoot), instance)
+}
+
+func resolveStateDirFromCWD() (string, error) {
+	projectRoot, err := resolveProjectRootFromCWD()
+	if err != nil {
+		return "", err
+	}
+	return projectStateDir(projectRoot), nil
+}
+
+func resolveInstanceDir(instance string) (string, error) {
+	projectRoot, err := resolveProjectRootFromCWD()
+	if err != nil {
+		return "", err
+	}
+	instDir := projectInstanceDir(projectRoot, instance)
+	if _, err := os.Stat(filepath.Join(instDir, "instance.json")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("instance %q is not initialized in %s (run obliviate init %s --workdir %s)", instance, projectRoot, instance, projectRoot)
+		}
+		return "", err
+	}
+	return instDir, nil
 }
 
 func ensureDefaultSkill(home string) error {
@@ -938,14 +995,9 @@ func parseVerify(raw json.RawMessage) ([]string, error) {
 }
 
 func addTasks(instance string, inputs []taskInput) ([]Task, error) {
-	home, err := resolveHome()
+	instDir, err := resolveInstanceDir(instance)
 	if err != nil {
 		return nil, err
-	}
-	stateDir := filepath.Join(home, "state")
-	instDir := filepath.Join(stateDir, instance)
-	if _, err := os.Stat(filepath.Join(instDir, "instance.json")); err != nil {
-		return nil, fmt.Errorf("instance %q is not initialized (run obliviate init %s)", instance, instance)
 	}
 	lockRelease, err := acquireInstanceLock(instDir)
 	if err != nil {

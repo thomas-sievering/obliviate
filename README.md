@@ -7,15 +7,15 @@ This project builds on the idea shared by Geoffrey Huntley (Ralph loop), adapted
 ## What It Does
 
 - Runs one-task-at-a-time execution loops with fresh agent context.
-- Stores canonical task state per instance in `state/<instance>/tasks.jsonl`.
-- Records task runs in `state/<instance>/runs.jsonl`.
-- Appends one-line cycle summaries to `state/<instance>/cycle.log`.
+- Stores canonical task state per instance in `<project>/.obliviate/state/<instance>/tasks.jsonl`.
+- Records task runs in `<project>/.obliviate/state/<instance>/runs.jsonl`.
+- Appends one-line cycle summaries to `<project>/.obliviate/state/<instance>/cycle.log`.
 - Supports optional commit enforcement with `obliviate go --require-commit`.
 
 ## Core Commands
 
 ```powershell
-obliviate init <instance> --workdir <path>
+obliviate init <instance> --workdir <project-path>
 obliviate add <instance> --title "..." --spec "..." --verify "..."
 obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--json]
 obliviate status [instance] [--json]
