@@ -31,7 +31,7 @@ Each line in `.obliviate/state/<instance>/tasks.jsonl` is one JSON object:
 - `spec`: string
 - `verify`: string array of shell commands
 - `status`: `todo | in_progress | done | failed | blocked`
-- `model_hint`: string (`codex`, `claude-sonnet`, `claude-opus`, etc)
+- `model_hint`: string, **required** (`codex`, `claude-sonnet`, `claude-opus`, etc)
 - `priority`: string (`low | med | high`)
 - `attempts`: number
 - `last_error`: string
@@ -45,7 +45,7 @@ Each line in `.obliviate/state/<instance>/tasks.jsonl` is one JSON object:
 - JSON array of task objects
 - JSONL (one task object per line)
 
-For input objects, required fields are `title`, `spec`, and `verify` (string or array of strings).
+For input objects, required fields are `title`, `spec`, `verify` (string or array of strings), and `model_hint`.
 
 ## Instance state files
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -34,6 +35,8 @@ const (
 	exitRuntime    = 10
 	lockWaitMax    = 15 * time.Second
 	lockWaitStep   = 150 * time.Millisecond
+	agentTimeout   = 15 * time.Minute
+	verifyTimeout  = 2 * time.Minute
 )
 
 type Task struct {
@@ -174,7 +177,7 @@ func printUsage() {
 
 Usage:
   obliviate init <instance> [--workdir .]
-  obliviate add <instance> --title "..." --spec "..." --verify "cmd" [--json]
+  obliviate add <instance> --title "..." --spec "..." --verify "cmd" --model "hint" [--json]
   obliviate add-batch <instance> [--file tasks.json|tasks.jsonl] [--stdin] [--json]
   obliviate status [instance] [--json]
   obliviate show <instance> <task-id> [--json]
@@ -211,17 +214,10 @@ func cmdInit(args []string) error {
 	if err := ensureDir(home); err != nil {
 		return err
 	}
-	if err := ensureDefaultSkill(home); err != nil {
-		return err
-	}
 
 	stateDir := projectStateDir(projectRoot)
 	instDir := filepath.Join(stateDir, instance)
-	globalDir := filepath.Join(stateDir, "global")
 	if err := ensureDir(instDir); err != nil {
-		return err
-	}
-	if err := ensureDir(globalDir); err != nil {
 		return err
 	}
 
@@ -247,7 +243,7 @@ func cmdInit(args []string) error {
 	if err := writeIfMissing(filepath.Join(instDir, "runs.jsonl"), ""); err != nil {
 		return err
 	}
-	if err := writeIfMissing(filepath.Join(globalDir, "learnings.md"), "# Global Learnings\n"); err != nil {
+	if err := writeIfMissing(filepath.Join(home, "global-learnings.md"), "# Global Learnings\n"); err != nil {
 		return err
 	}
 
@@ -275,6 +271,9 @@ func cmdAdd(args []string) error {
 	}
 	if strings.TrimSpace(*title) == "" || strings.TrimSpace(*spec) == "" || len(verify) == 0 {
 		return errors.New("title, spec, and at least one --verify are required")
+	}
+	if strings.TrimSpace(*modelHint) == "" {
+		return errors.New("model_hint is required (use --model to specify)")
 	}
 
 	task := taskInput{
@@ -392,7 +391,7 @@ func cmdStatus(args []string) error {
 	}
 	instances := make([]string, 0)
 	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "global" {
+		if !e.IsDir() {
 			continue
 		}
 		instances = append(instances, e.Name())
@@ -716,7 +715,7 @@ func cmdGo(args []string) error {
 			headBefore, headBeforeErr = gitHead(workdir)
 		}
 
-		provider, model, agentOut, execErr, fb := runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt)
+		provider, model, agentOut, execErr, fb := runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt, agentTimeout)
 		run := RunLog{
 			TaskID:          t.ID,
 			Provider:        provider,
@@ -737,7 +736,7 @@ func cmdGo(args []string) error {
 			var failedCmd string
 			failedOutput := ""
 			for _, v := range t.Verify {
-				out, verifyErr := runVerify(workdir, v)
+				out, verifyErr := runVerify(workdir, v, verifyTimeout)
 				if verifyErr != nil {
 					failedCmd = v
 					failedOutput = out + "\n" + verifyErr.Error()
@@ -887,14 +886,6 @@ func resolveInstanceDir(instance string) (string, error) {
 	return instDir, nil
 }
 
-func ensureDefaultSkill(home string) error {
-	p := filepath.Join(home, "SKILL.md")
-	if _, err := os.Stat(p); err == nil {
-		return nil
-	}
-	return writeIfMissing(p, "---\nname: obliviate\ndescription: Fresh-context task loop runner.\n---\n")
-}
-
 func parseBatch(payload []byte) ([]taskInput, error) {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
@@ -945,6 +936,9 @@ func normalizeInput(raw taskInputRaw) (taskInput, error) {
 	}
 	if strings.TrimSpace(raw.Title) == "" || strings.TrimSpace(raw.Spec) == "" || len(verify) == 0 {
 		return taskInput{}, errors.New("title, spec, and verify are required")
+	}
+	if strings.TrimSpace(raw.ModelHint) == "" {
+		return taskInput{}, errors.New("model_hint is required")
 	}
 	priority := strings.TrimSpace(raw.Priority)
 	if priority == "" {
@@ -1230,8 +1224,8 @@ func resolveWorkdir(projectRoot, configured string) string {
 	return filepath.Clean(filepath.Join(projectRoot, w))
 }
 
-func runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt string) (provider, model, output string, err error, fb *fallbackAttempt) {
-	out1, err1 := runAgent(primaryProvider, primaryModel, workdir, prompt)
+func runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt string, timeout time.Duration) (provider, model, output string, err error, fb *fallbackAttempt) {
+	out1, err1 := runAgent(primaryProvider, primaryModel, workdir, prompt, timeout)
 	if err1 == nil {
 		return primaryProvider, primaryModel, out1, nil, nil
 	}
@@ -1245,7 +1239,7 @@ func runAgentWithFallback(primaryProvider, primaryModel, workdir, prompt string)
 		return primaryProvider, primaryModel, out1, err1, nil
 	}
 
-	out2, err2 := runAgent(fallbackProvider, fallbackModel, workdir, prompt)
+	out2, err2 := runAgent(fallbackProvider, fallbackModel, workdir, prompt, timeout)
 	combined := strings.TrimSpace(out1 + "\n\n[obliviate fallback]\n" + out2)
 	details := &fallbackAttempt{
 		PrimaryProvider:  primaryProvider,
@@ -1304,7 +1298,18 @@ func classifyProviderFailure(err error, output string) string {
 	}
 }
 
-func runAgent(provider, model, workdir, prompt string) (string, error) {
+func killProcessTree(p *os.Process) error {
+	kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(p.Pid))
+	if err := kill.Run(); err != nil {
+		return p.Kill()
+	}
+	return nil
+}
+
+func runAgent(provider, model, workdir, prompt string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	var cmd *exec.Cmd
 	if provider == "claude" {
 		args := []string{
@@ -1318,7 +1323,7 @@ func runAgent(provider, model, workdir, prompt string) (string, error) {
 		if model != "" {
 			args = append(args, "--model", model)
 		}
-		cmd = exec.Command("claude", args...)
+		cmd = exec.CommandContext(ctx, "claude", args...)
 		cmd.Stdin = strings.NewReader(prompt)
 	} else {
 		args := []string{
@@ -1331,25 +1336,38 @@ func runAgent(provider, model, workdir, prompt string) (string, error) {
 		if model != "" {
 			args = append([]string{"exec", "--cd", workdir, "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--model", model, "-"})
 		}
-		cmd = exec.Command("codex", args...)
+		cmd = exec.CommandContext(ctx, "codex", args...)
 		cmd.Stdin = strings.NewReader(prompt)
 	}
 
 	cmd.Dir = workdir
+	cmd.WaitDelay = 10 * time.Second
+	cmd.Cancel = func() error { return killProcessTree(cmd.Process) }
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return out.String(), fmt.Errorf("agent timed out after %s: %w", timeout, err)
+	}
 	return out.String(), err
 }
 
-func runVerify(workdir, verifyCmd string) (string, error) {
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", verifyCmd)
+func runVerify(workdir, verifyCmd string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", verifyCmd)
 	cmd.Dir = workdir
+	cmd.WaitDelay = 10 * time.Second
+	cmd.Cancel = func() error { return killProcessTree(cmd.Process) }
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return out.String(), fmt.Errorf("verify timed out after %s: %w", timeout, err)
+	}
 	return out.String(), err
 }
 
@@ -1498,7 +1516,8 @@ Rules for each task run:
 3. Run all verify commands from the task.
 4. Commit once with a clear message.
 5. If blocked, report failing command and why.
-6. Append non-obvious learnings to this instance's learnings.md.
+6. Read and apply learnings from both .obliviate/global-learnings.md and this instance's learnings.md.
+7. Append non-obvious learnings to this instance's learnings.md (and promote reusable ones to .obliviate/global-learnings.md).
 `, instance)
 }
 
@@ -1544,3 +1563,8 @@ func classifyExitCode(err error) int {
 		return exitRuntime
 	}
 }
+
+
+
+
+

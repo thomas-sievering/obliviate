@@ -9,8 +9,8 @@ import (
 
 func TestParseBatchJSONAndJSONL(t *testing.T) {
 	jsonArray := []byte(`[
-		{"title":"t1","spec":"s1","verify":"go test ./..."},
-		{"title":"t2","spec":"s2","verify":["echo ok","go build ./..."]}
+		{"title":"t1","spec":"s1","verify":"go test ./...","model_hint":"codex"},
+		{"title":"t2","spec":"s2","verify":["echo ok","go build ./..."],"model_hint":"codex"}
 	]`)
 	got, err := parseBatch(jsonArray)
 	if err != nil {
@@ -26,13 +26,47 @@ func TestParseBatchJSONAndJSONL(t *testing.T) {
 		t.Fatalf("expected 2 verify commands for second task, got %d", len(got[1].Verify))
 	}
 
-	jsonl := []byte("{\"title\":\"a\",\"spec\":\"b\",\"verify\":\"echo 1\"}\n{\"title\":\"c\",\"spec\":\"d\",\"verify\":[\"echo 2\"]}\n")
+	jsonl := []byte("{\"title\":\"a\",\"spec\":\"b\",\"verify\":\"echo 1\",\"model_hint\":\"codex\"}\n{\"title\":\"c\",\"spec\":\"d\",\"verify\":[\"echo 2\"],\"model_hint\":\"codex\"}\n")
 	got, err = parseBatch(jsonl)
 	if err != nil {
 		t.Fatalf("parseBatch(jsonl) error: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 tasks from jsonl, got %d", len(got))
+	}
+}
+
+func TestNormalizeInputModelHintRequired(t *testing.T) {
+	// model_hint present -> succeeds
+	_, err := normalizeInput(taskInputRaw{
+		Title:     "t",
+		Spec:      "s",
+		Verify:    []byte(`"echo ok"`),
+		ModelHint: "codex",
+	})
+	if err != nil {
+		t.Fatalf("expected success with model_hint set, got: %v", err)
+	}
+
+	// model_hint empty -> error
+	_, err = normalizeInput(taskInputRaw{
+		Title:  "t",
+		Spec:   "s",
+		Verify: []byte(`"echo ok"`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "model_hint is required") {
+		t.Fatalf("expected error containing 'model_hint is required', got: %v", err)
+	}
+
+	// model_hint whitespace-only -> error
+	_, err = normalizeInput(taskInputRaw{
+		Title:     "t",
+		Spec:      "s",
+		Verify:    []byte(`"echo ok"`),
+		ModelHint: "   ",
+	})
+	if err == nil || !strings.Contains(err.Error(), "model_hint is required") {
+		t.Fatalf("expected error for whitespace-only model_hint, got: %v", err)
 	}
 }
 
