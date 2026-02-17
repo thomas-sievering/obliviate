@@ -1300,7 +1300,7 @@ func buildExecutionPrompt(home, instance string, task Task) (string, error) {
 	promptMD, _ := readText(filepath.Join(instDir, "prompt.md"))
 	specMD, _ := readText(filepath.Join(instDir, "spec.md"))
 	instLearn, _ := readText(filepath.Join(instDir, "learnings.md"))
-	globalLearn, _ := readText(filepath.Join(home, "state", "global", "learnings.md"))
+	globalLearn, _ := readText(filepath.Join(home, "global-learnings.md"))
 
 	taskJSON, _ := json.MarshalIndent(task, "", "  ")
 	parts := []string{
