@@ -1,0 +1,13 @@
+# Binaries
+*.exe
+
+# Runtime state
+state/
+
+# Temp/build artifacts
+*.tmp
+*.log
+
+# Keep examples/docs in repo via explicit includes when needed
+!README.md
+!SKILL.md
