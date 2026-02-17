@@ -705,6 +705,42 @@ func cmdGo(args []string) error {
 		lockRelease()
 	}
 
+	// Startup banner: count remaining work and print immediately.
+	{
+		tasks, err := loadTasks(tasksPath)
+		if err == nil {
+			todo, failed, done, blocked := 0, 0, 0, 0
+			for _, t := range tasks {
+				switch t.Status {
+				case statusTodo:
+					todo++
+				case statusFailed:
+					failed++
+				case statusDone:
+					done++
+				case statusBlocked:
+					blocked++
+				}
+			}
+			remaining := todo + failed
+			if *jsonOut {
+				printJSON(map[string]any{
+					"event":     "started",
+					"instance":  instance,
+					"total":     len(tasks),
+					"remaining": remaining,
+					"done":      done,
+					"blocked":   blocked,
+					"timeout":   flagAgentTimeout.String(),
+					"cooldown":  cooldown.String(),
+				})
+			} else {
+				fmt.Printf("starting %s: %d remaining (%d todo, %d failed-retry), %d done, %d blocked, timeout=%s cooldown=%s\n",
+					instance, remaining, todo, failed, done, blocked, flagAgentTimeout.String(), cooldown.String())
+			}
+		}
+	}
+
 	processed := 0
 	doneCount := 0
 	failedCount := 0
@@ -765,6 +801,19 @@ func cmdGo(args []string) error {
 		lockRelease()
 
 		primaryProvider, primaryModel := routeModel(t.ModelHint)
+		if *jsonOut {
+			printJSON(map[string]any{
+				"event":    "task_start",
+				"task_id":  t.ID,
+				"title":    t.Title,
+				"provider": primaryProvider,
+				"model":    primaryModel,
+				"attempt":  t.Attempts + 1,
+			})
+		} else {
+			fmt.Printf("%s starting %s (%s) [%s/%s] attempt=%d\n", t.ID, t.Title, t.ModelHint, primaryProvider, primaryModel, t.Attempts+1)
+		}
+
 		prompt, err := buildExecutionPrompt(home, instance, t)
 		if err != nil {
 			return err
