@@ -75,6 +75,12 @@ Each line in `.obliviate/state/<instance>/tasks.jsonl` is one JSON object:
 
 For input objects, required fields are `title`, `spec`, `verify` (string or array of strings), and `model_hint`.
 
+## Global files
+
+- `.obliviate/SKILL.md`: tool-level skill instructions
+- `.obliviate/global-prompt.md`: project-wide agent rules and conventions (applies to all instances)
+- `.obliviate/global-learnings.md`: cross-instance discovered patterns
+
 ## Instance state files
 
 - `.obliviate/state/<instance>/prompt.md`: instance runtime prompt/rules
@@ -97,6 +103,7 @@ For input objects, required fields are `title`, `spec`, `verify` (string or arra
 `obliviate.exe go` builds each task prompt from:
 
 - `SKILL.md`
+- `global-prompt.md` (project-wide rules)
 - `prompt.md`
 - `spec.md`
 - current task JSON

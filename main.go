@@ -247,6 +247,9 @@ func cmdInit(args []string) error {
 	if err := writeIfMissing(filepath.Join(home, "global-learnings.md"), "# Global Learnings\n"); err != nil {
 		return err
 	}
+	if err := writeIfMissing(filepath.Join(home, "global-prompt.md"), defaultGlobalPrompt()); err != nil {
+		return err
+	}
 
 	fmt.Printf("initialized instance %q at %s\n", instance, instDir)
 	return nil
@@ -1296,6 +1299,7 @@ func nextRunnableTaskIndex(tasks []Task, maxAttempts int) int {
 
 func buildExecutionPrompt(home, instance string, task Task) (string, error) {
 	skill, _ := readText(filepath.Join(home, "SKILL.md"))
+	globalPrompt, _ := readText(filepath.Join(home, "global-prompt.md"))
 	instDir := filepath.Join(home, "state", instance)
 	promptMD, _ := readText(filepath.Join(instDir, "prompt.md"))
 	specMD, _ := readText(filepath.Join(instDir, "spec.md"))
@@ -1306,6 +1310,7 @@ func buildExecutionPrompt(home, instance string, task Task) (string, error) {
 	parts := []string{
 		"You are running inside Obliviate's fresh-context task loop. Complete exactly one task.",
 		"## SKILL.md\n" + skill,
+		"## Global Prompt\n" + globalPrompt,
 		"## Instance Prompt\n" + promptMD,
 		"## Feature Spec\n" + specMD,
 		"## Global Learnings\n" + globalLearn,
@@ -1662,6 +1667,14 @@ Rules for each task run:
 6. Read and apply learnings from both .obliviate/global-learnings.md and this instance's learnings.md.
 7. Append non-obvious learnings to this instance's learnings.md (and promote reusable ones to .obliviate/global-learnings.md).
 `, instance)
+}
+
+func defaultGlobalPrompt() string {
+	return `# Global Prompt
+
+Project-wide rules and conventions for all instances.
+Add coding standards, error handling patterns, and other conventions here.
+`
 }
 
 func acquireInstanceLock(instDir string) (func(), error) {

@@ -295,3 +295,54 @@ func TestResolveInstanceDirFromCWD(t *testing.T) {
 		t.Fatalf("resolveInstanceDir = %q, want %q", got, instDir)
 	}
 }
+
+func TestBuildExecutionPromptIncludesGlobalPrompt(t *testing.T) {
+	home := t.TempDir()
+	instance := "test-inst"
+	instDir := filepath.Join(home, "state", instance)
+	if err := os.MkdirAll(instDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	globalContent := "Use slog not log. Wrap errors with fmt.Errorf."
+	if err := os.WriteFile(filepath.Join(home, "global-prompt.md"), []byte(globalContent), 0o644); err != nil {
+		t.Fatalf("write global-prompt.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(instDir, "prompt.md"), []byte("instance rules here"), 0o644); err != nil {
+		t.Fatalf("write prompt.md: %v", err)
+	}
+
+	task := Task{ID: "OB-001", Title: "test task", Spec: "do stuff", Status: statusTodo}
+	prompt, err := buildExecutionPrompt(home, instance, task)
+	if err != nil {
+		t.Fatalf("buildExecutionPrompt error: %v", err)
+	}
+	if !strings.Contains(prompt, globalContent) {
+		t.Fatalf("prompt should contain global-prompt.md content, got:\n%s", prompt)
+	}
+	globalIdx := strings.Index(prompt, "## Global Prompt")
+	instanceIdx := strings.Index(prompt, "## Instance Prompt")
+	if globalIdx == -1 || instanceIdx == -1 {
+		t.Fatalf("expected both Global Prompt and Instance Prompt sections")
+	}
+	if globalIdx >= instanceIdx {
+		t.Fatalf("Global Prompt (at %d) should appear before Instance Prompt (at %d)", globalIdx, instanceIdx)
+	}
+}
+
+func TestBuildExecutionPromptMissingGlobalPrompt(t *testing.T) {
+	home := t.TempDir()
+	instance := "test-inst"
+	instDir := filepath.Join(home, "state", instance)
+	if err := os.MkdirAll(instDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	task := Task{ID: "OB-001", Title: "test task", Spec: "do stuff", Status: statusTodo}
+	prompt, err := buildExecutionPrompt(home, instance, task)
+	if err != nil {
+		t.Fatalf("buildExecutionPrompt error: %v", err)
+	}
+	if !strings.Contains(prompt, "## Global Prompt") {
+		t.Fatalf("prompt should contain ## Global Prompt section heading even when file is missing")
+	}
+}
