@@ -14,26 +14,22 @@ Use `obliviate.exe` as the single writer and runner for task-loop state.
 - Do not use recursive workspace search to discover binaries when the skill-local path is known.
 - If multiple copies exist, prefer the skill-local copy and report the chosen path before running commands.
 
-## Milestone sizing
+## Task decomposition
 
-Before decomposing work into tasks, ask the user how big each task should be. Use one of these tiers:
+Each task must be:
 
-| Tier | Scope per task | Typical agent time | When to use |
-|---|---|---|---|
-| **Standard** | One focused feature slice (a few files + tests) | 10-30 min | Quick iterative work, tight feedback loops |
-| **Large** (default) | A full feature or subsystem across many files | 30-60 min | Overnight or long unattended runs |
-| **Full send** | Entire spec crammed into as few tasks as possible | 60+ min | Maximum unattended runtime, fire-and-forget |
+- **One feature** — a single, coherent unit of work (one bridge client, one command handler, one subsystem)
+- **Agent-completable** — doable by a fresh-context agent in a few minutes, not an hour
+- **Verifiable** — has concrete verify commands that prove the task is done
 
-**Default is Large.** If the user doesn't specify, decompose into large tasks.
+If a feature is too big for one task, split it. A bridge client with 6 methods might be two tasks (3 methods each). A subsystem with setup + integration might be one task for the core logic and another for wiring it in.
 
-When asking, phrase it as: *"How chunky should each task be? Standard (10-30 min each), Large (30-60 min, default), or Full send (60+ min, fewest tasks)?"*
-
-Apply the chosen tier when writing `spec` fields: larger tiers should have more detailed specs with multiple sub-objectives per task, while Standard should be tightly scoped to one concern.
+Err on the side of more, smaller tasks. An agent that finishes fast and passes verification is better than one that times out halfway through a mega-task.
 
 ## Canonical workflow
 
 1. `obliviate.exe init <instance> --workdir <path>`
-2. Ask the user about milestone sizing (see above)
+2. Decompose the spec into tasks (see task decomposition rules above)
 3. Add tasks with `obliviate.exe add` or `obliviate.exe add-batch`
 4. **Hand off** `go` to the user (see below)
 5. Check progress with `obliviate.exe status [instance]`
