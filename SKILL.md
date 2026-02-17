@@ -26,6 +26,22 @@ If a feature is too big for one task, split it. A bridge client with 6 methods m
 
 Err on the side of more, smaller tasks. An agent that finishes fast and passes verification is better than one that times out halfway through a mega-task.
 
+## Model selection
+
+Pick `model_hint` based on task complexity — don't default everything to `codex`.
+
+| Hint | When to use | Examples |
+|------|------------|----------|
+| `claude-haiku` | Mechanical / boilerplate tasks with clear specs | add a version command, rename a flag, write simple tests, update docs |
+| `claude-sonnet` | Moderate tasks needing some reasoning | implement a well-defined function, add a CLI subcommand, wire up an existing API |
+| `codex` | Standard implementation tasks, good default for code generation | build a new module, implement business logic, multi-file refactors |
+| `claude-opus` | Hard tasks requiring deep reasoning or large-context understanding | complex architecture changes, subtle bug investigation, cross-cutting refactors |
+
+**Rules:**
+- Vary hints across a batch — not every task is the same difficulty
+- When in doubt, prefer `claude-sonnet` over `codex` for tasks that need careful reasoning
+- Reserve `claude-opus` for tasks where cheaper models would likely fail or need retries
+
 ## Canonical workflow
 
 1. `obliviate.exe init <instance> --workdir <path>`
