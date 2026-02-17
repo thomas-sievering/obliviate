@@ -38,6 +38,7 @@ const (
 	lockWaitStep   = 150 * time.Millisecond
 	agentTimeout   = 15 * time.Minute
 	verifyTimeout  = 2 * time.Minute
+	notifyctlPath  = `C:\dev\_skills\notifyctl\tool\notifyctl.exe`
 )
 
 type Task struct {
@@ -185,7 +186,7 @@ Usage:
   obliviate reset <instance> <task-id> [--json]
   obliviate skip <instance> <task-id> [--reason "..." ] [--json]
   obliviate runs <instance> [--limit N] [--task-id OB-001] [--json]
-  obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 10s] [--max-attempts 2] [--max-transient-retries 3] [--json]`)
+  obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 10s] [--max-attempts 2] [--max-transient-retries 3] [--no-notify] [--json]`)
 	fmt.Println(`
 Exit codes:
   0  success
@@ -650,6 +651,7 @@ func cmdGo(args []string) error {
 	cooldown := fs.Duration("cooldown", 10*time.Second, "sleep between tasks")
 	flagMaxAttempts := fs.Int("max-attempts", maxAttempts, "override max attempts per task")
 	maxTransientRetries := fs.Int("max-transient-retries", 3, "max backoff retries for transient provider failures per task")
+	noNotify := fs.Bool("no-notify", false, "disable notifyctl event emission on completion")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -995,6 +997,17 @@ func cmdGo(args []string) error {
 
 	if err := appendCycleSummaryLine(filepath.Join(instDir, "cycle.log"), instance, processed, doneCount, failedCount, blockedCount, taskIDs, *dryRun); err != nil {
 		return err
+	}
+
+	if !*noNotify && !*dryRun && processed > 0 {
+		if err := emitNotification(instance, processed, doneCount, failedCount, blockedCount); err != nil {
+			// Non-fatal: log but don't fail the run.
+			if *jsonOut {
+				printJSON(map[string]any{"event": "notify_error", "error": err.Error()})
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: notifyctl: %v\n", err)
+			}
+		}
 	}
 
 	if *jsonOut {
@@ -1671,6 +1684,38 @@ func appendCycleSummaryLine(path, instance string, processed, done, failed, bloc
 		joinTaskIDs(taskIDs),
 	)
 	return appendLine(path, line)
+}
+
+func emitNotification(instance string, processed, done, failed, blocked int) error {
+	if _, err := os.Stat(notifyctlPath); err != nil {
+		return fmt.Errorf("notifyctl not found at %s", notifyctlPath)
+	}
+
+	ts := nowUTC()
+	eventID := fmt.Sprintf("obliviate:%s:%s", instance, ts)
+	body := fmt.Sprintf("instance=%s processed=%d done=%d failed=%d blocked=%d", instance, processed, done, failed, blocked)
+	metaJSON, _ := json.Marshal(map[string]any{
+		"instance":  instance,
+		"processed": processed,
+		"done":      done,
+		"failed":    failed,
+		"blocked":   blocked,
+	})
+
+	cmd := exec.Command(notifyctlPath, "emit",
+		"--id", eventID,
+		"--type", "obliviate.run.completed.v1",
+		"--source", "obliviate",
+		"--created-at", ts,
+		"--title", "Obliviate run finished",
+		"--body", body,
+		"--meta-json", string(metaJSON),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func joinTaskIDs(taskIDs []string) string {
