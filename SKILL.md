@@ -40,7 +40,7 @@ Err on the side of more, smaller tasks. An agent that finishes fast and passes v
 **Your job as the orchestrating agent stops after adding tasks.** Do NOT execute `obliviate.exe go` yourself. Instead, give the user the ready-to-paste command and tell them to run it in a separate terminal:
 
 ```
-obliviate.exe go <instance> --agent-timeout 20m --cooldown 10s --json
+obliviate.exe go <instance> --json
 ```
 
 Why:

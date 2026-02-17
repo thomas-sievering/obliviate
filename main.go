@@ -185,7 +185,7 @@ Usage:
   obliviate reset <instance> <task-id> [--json]
   obliviate skip <instance> <task-id> [--reason "..." ] [--json]
   obliviate runs <instance> [--limit N] [--task-id OB-001] [--json]
-  obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 0s] [--max-attempts 2] [--max-transient-retries 3] [--json]`)
+  obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 10s] [--max-attempts 2] [--max-transient-retries 3] [--json]`)
 	fmt.Println(`
 Exit codes:
   0  success
@@ -637,7 +637,7 @@ func cmdRuns(args []string) error {
 
 func cmdGo(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 0s] [--max-attempts 2] [--max-transient-retries 3]")
+		return errors.New("usage: obliviate go <instance> [--limit N] [--dry-run] [--require-commit] [--agent-timeout 15m] [--cooldown 10s] [--max-attempts 2] [--max-transient-retries 3]")
 	}
 	instance := args[0]
 
@@ -647,7 +647,7 @@ func cmdGo(args []string) error {
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	requireCommit := fs.Bool("require-commit", false, "require each successful task to create a new git commit")
 	flagAgentTimeout := fs.Duration("agent-timeout", agentTimeout, "override agent subprocess timeout")
-	cooldown := fs.Duration("cooldown", 0, "sleep between tasks")
+	cooldown := fs.Duration("cooldown", 10*time.Second, "sleep between tasks")
 	flagMaxAttempts := fs.Int("max-attempts", maxAttempts, "override max attempts per task")
 	maxTransientRetries := fs.Int("max-transient-retries", 3, "max backoff retries for transient provider failures per task")
 	if err := fs.Parse(args[1:]); err != nil {
