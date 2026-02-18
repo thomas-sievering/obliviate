@@ -1801,6 +1801,11 @@ Add coding standards, error handling patterns, and other conventions here.
 }
 
 func acquireInstanceLock(instDir string) (func(), error) {
+	// Ensure the state directory exists — an agent task may have
+	// recreated the project tree and wiped .obliviate in the process.
+	if err := ensureDir(instDir); err != nil {
+		return nil, fmt.Errorf("cannot create instance dir %s: %w", instDir, err)
+	}
 	lockPath := filepath.Join(instDir, ".tasks.lock")
 	start := time.Now()
 	for {
