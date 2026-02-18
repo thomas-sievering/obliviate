@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1509,11 +1510,14 @@ func isTransientFailure(reason string) bool {
 }
 
 func killProcessTree(p *os.Process) error {
-	kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(p.Pid))
-	if err := kill.Run(); err != nil {
-		return p.Kill()
+	if runtime.GOOS == "windows" {
+		kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(p.Pid))
+		if err := kill.Run(); err != nil {
+			return p.Kill()
+		}
+		return nil
 	}
-	return nil
+	return p.Kill()
 }
 
 func runAgent(parentCtx context.Context, provider, model, workdir, prompt string, timeout time.Duration) (string, error) {
@@ -1563,11 +1567,36 @@ func runAgent(parentCtx context.Context, provider, model, workdir, prompt string
 	return out.String(), err
 }
 
+// resolveShell returns the shell binary and its "run command" flag.
+// Prefers bash for consistent cross-platform behaviour, falls back to
+// cmd.exe on Windows or sh on Unix.
+func resolveShell() (string, string) {
+	if p, err := exec.LookPath("bash"); err == nil {
+		return p, "-c"
+	}
+	if runtime.GOOS == "windows" {
+		// Common Git-for-Windows / MSYS2 locations not always in PATH.
+		for _, candidate := range []string{
+			filepath.Join(os.Getenv("ProgramFiles"), "Git", "bin", "bash.exe"),
+			filepath.Join(os.Getenv("ProgramFiles(x86)"), "Git", "bin", "bash.exe"),
+			filepath.Join(os.Getenv("LocalAppData"), "Programs", "Git", "bin", "bash.exe"),
+			`C:\msys64\usr\bin\bash.exe`,
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, "-c"
+			}
+		}
+		return "cmd", "/c"
+	}
+	return "sh", "-c"
+}
+
 func runVerify(workdir, verifyCmd string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", verifyCmd)
+	shell, flag := resolveShell()
+	cmd := exec.CommandContext(ctx, shell, flag, verifyCmd)
 	cmd.Dir = workdir
 	cmd.WaitDelay = 10 * time.Second
 	cmd.Cancel = func() error { return killProcessTree(cmd.Process) }
